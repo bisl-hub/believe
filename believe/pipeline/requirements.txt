@@ -1,7 +1,0 @@
-httpx
-openai
-tqdm
-matplotlib
-sqlalchemy
-psycopg2-binary
-httpx[http2]
