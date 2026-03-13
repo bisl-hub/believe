@@ -114,6 +114,36 @@ class LiteratureClient:
                 time.sleep(wait_time)
         return None
 
+    def search_pmids_via_qwen_retriever(self, query: str, max_articles: float = float('inf')) -> List[str]:
+        log.info(f"Searching PMIDs via Qwen-Retriever: '{query}'")
+        try:
+            # query might be a json string from the frontend or plain text
+            try:
+                payload = json.loads(query)
+                q_text = payload.get("q", query)
+                n = payload.get("n", 50)
+                if max_articles != float('inf'):
+                    n = min(n, int(max_articles))
+            except json.JSONDecodeError:
+                q_text = query
+                n = int(max_articles) if max_articles != float('inf') else 50
+                
+            qwen_url = "http://neuron.uiyunkim.com:8001/search/pmids"
+            params = {"q": q_text, "n": n}
+            
+            resp = self._request("GET", qwen_url, params=params)
+            if not resp or resp.status_code != 200:
+                log.warning("Qwen-Retriever search failed. Returning empty list.")
+                return []
+                
+            pmids = resp.json().get("pmids", [])
+            log.info(f"Qwen-Retriever Search: Collected {len(pmids)} unique PMIDs.")
+            
+            return [str(p) for p in pmids]
+        except Exception as e:
+            log.error(f"Error connecting to Qwen-Retriever: {e}")
+            return []
+
     def _fetch_search_page(self, query: str, page: int) -> List[str]:
         params = {"text": query, "page": page, "size": PUBTATOR_PAGE_SIZE, "format": "json"}
         resp = self._request("GET", PUBTATOR_SEARCH_URL, params=params)

@@ -224,6 +224,8 @@ def run_pipeline(query: str, hypothesis: str, source_type: str = "pubtator3", ma
         with LiteratureClient() as client:
             if source_type == "pubmed":
                 pmids = client.search_pmids_via_pubmed(query, max_articles=max_articles, max_articles_percent=max_articles_percent)
+            elif source_type == "qwen_retriever":
+                pmids = client.search_pmids_via_qwen_retriever(query, max_articles=max_articles)
             else:
                 pmids = client.search_pmids_via_pubtator(query, max_articles=max_articles, max_articles_percent=max_articles_percent)
         log.info(f"     └─ Search Complete: Discovered {len(pmids) if pmids else 0} new PMIDs to process.")

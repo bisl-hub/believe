@@ -31,6 +31,7 @@ export default function Datasets() {
     const [dsName, setDsName] = useState('')
     const [dsSourceType, setDsSourceType] = useState('pubtator3')
     const [dsQuery, setDsQuery] = useState('')
+    const [dsQwenLimit, setDsQwenLimit] = useState(50)
 
     const [isModalOpen, setIsModalOpen] = useState(false)
 
@@ -38,7 +39,19 @@ export default function Datasets() {
         setEditingDsId(c.id)
         setDsName(c.name)
         setDsSourceType(c.source_type)
-        setDsQuery(c.query)
+        if (c.source_type === 'qwen_retriever') {
+            try {
+                const parsed = JSON.parse(c.query)
+                setDsQuery(parsed.q || '')
+                setDsQwenLimit(parsed.n || 50)
+            } catch (e) {
+                setDsQuery(c.query)
+                setDsQwenLimit(50)
+            }
+        } else {
+            setDsQuery(c.query)
+            setDsQwenLimit(50)
+        }
         setIsModalOpen(true)
     }
 
@@ -47,6 +60,7 @@ export default function Datasets() {
         setDsName('')
         setDsSourceType('pubtator3')
         setDsQuery('')
+        setDsQwenLimit(50)
         setIsModalOpen(false)
     }
 
@@ -73,11 +87,16 @@ export default function Datasets() {
 
     const { mutate: createDs } = useMutation(async () => {
         if (!currentProject) throw new Error("No project selected")
+
+        const finalQuery = dsSourceType === 'qwen_retriever'
+            ? JSON.stringify({ q: dsQuery, n: dsQwenLimit })
+            : dsQuery;
+
         return await api.post('/configs/datasets', {
             project_id: currentProject.id,
             name: dsName,
             source_type: dsSourceType,
-            query: dsQuery
+            query: finalQuery
         })
     }, {
         onSuccess: () => {
@@ -90,11 +109,16 @@ export default function Datasets() {
 
     const { mutate: updateDs } = useMutation(async (id: number) => {
         if (!currentProject) throw new Error("No project selected")
+
+        const finalQuery = dsSourceType === 'qwen_retriever'
+            ? JSON.stringify({ q: dsQuery, n: dsQwenLimit })
+            : dsQuery;
+
         return await api.put(`/configs/datasets/${id}`, {
             project_id: currentProject.id,
             name: dsName,
             source_type: dsSourceType,
-            query: dsQuery
+            query: finalQuery
         })
     }, {
         onSuccess: () => {
@@ -143,10 +167,11 @@ export default function Datasets() {
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">Source Type</label>
-                            <select value={dsSourceType} onChange={e => { setDsSourceType(e.target.value); setDsQuery(''); }} className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2">
+                            <select value={dsSourceType} onChange={e => { setDsSourceType(e.target.value); setDsQuery(''); setDsQwenLimit(50); }} className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2">
                                 <option value="txt_file">Local TXT File (PMIDs)</option>
                                 <option value="pubtator3">PubTator3 Query</option>
                                 <option value="pubmed">PubMed Server Query</option>
+                                <option value="qwen_retriever">Qwen-Retriever Semantic App</option>
                             </select>
                         </div>
 
@@ -155,6 +180,17 @@ export default function Datasets() {
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Upload PMIDs (.txt, one per line)</label>
                                 <input type="file" accept=".txt" onChange={handleFileUpload} required className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
                             </div>
+                        ) : dsSourceType === 'qwen_retriever' ? (
+                            <>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Search Query</label>
+                                    <input type="text" placeholder="e.g. Recent advances in cancer immunotherapy" value={dsQuery} onChange={e => setDsQuery(e.target.value)} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                </div>
+                                <div className="col-span-2">
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Retrieval Limit (N)</label>
+                                    <input type="number" min="1" value={dsQwenLimit} onChange={e => setDsQwenLimit(parseInt(e.target.value))} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                </div>
+                            </>
                         ) : (
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Search Query</label>
@@ -262,7 +298,16 @@ export default function Datasets() {
                                             </div>
                                         )}
                                     </div>
-                                    <p className="text-sm text-slate-500 truncate" title={c.query}>Query/Data: {c.query}</p>
+                                    <p className="text-sm text-slate-500 truncate" title={c.query}>
+                                        Query/Data: {c.source_type === 'qwen_retriever' ? (
+                                            (() => {
+                                                try {
+                                                    const parsed = JSON.parse(c.query);
+                                                    return `"${parsed.q}" (Limit: ${parsed.n})`;
+                                                } catch (e) { return c.query; }
+                                            })()
+                                        ) : c.query}
+                                    </p>
                                 </div>
                                 <div className="space-x-2 pl-4 flex-shrink-0 flex items-center">
                                     <button onClick={(e) => { e.stopPropagation(); handleEdit(c); }} className="text-sm px-4 py-2 bg-slate-50 text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 hover:text-blue-600 font-medium z-10 relative transition-colors flex items-center gap-1.5 shadow-sm whitespace-nowrap">

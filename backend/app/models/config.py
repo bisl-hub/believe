@@ -8,6 +8,7 @@ class SourceType(str, enum.Enum):
     TXT_FILE = "txt_file"
     PUBTATOR3 = "pubtator3"
     PUBMED = "pubmed"
+    QWEN_RETRIEVER = "qwen_retriever"
 
 class ModelConfig(Base):
     __tablename__ = "model_configs"

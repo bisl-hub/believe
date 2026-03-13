@@ -25,7 +25,7 @@ class Job(Base):
     max_articles = Column(Float, default=float('inf'))
     status = Column(String, default=JobStatus.QUEUED)
     job_type = Column(String, default=JobType.ANALYSIS)
-    source_type = Column(String, default="pubtator3") # "txt_file", "pubtator3", "pubmed"
+    source_type = Column(String, default="pubtator3") # "pubtator3", "pubmed", "txt_file", "qwen_retriever"
     container_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
