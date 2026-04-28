@@ -32,3 +32,4 @@ class Project(Base):
     dataset_configs = relationship("DatasetConfig", back_populates="project", cascade="all, delete-orphan")
     analysis_configs = relationship("AnalysisConfig", back_populates="project", cascade="all, delete-orphan")
     model_configs = relationship("ModelConfig", back_populates="project", cascade="all, delete-orphan")
+    api_keys = relationship("ProjectApiKey", back_populates="project", cascade="all, delete-orphan")

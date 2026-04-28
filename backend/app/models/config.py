@@ -37,7 +37,7 @@ class AnalysisConfig(Base):
     name = Column(String, index=True)
     owner_id = Column(Integer, ForeignKey("users.id"))
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
-    default_dataset_id = Column(Integer, ForeignKey("dataset_configs.id"), nullable=True)
+    default_dataset_id = Column(Integer, ForeignKey("dataset_configs.id", ondelete="SET NULL"), nullable=True)
     
     # Deprecated: query_term = Column(String) -> Moved to DatasetConfig
     hypothesis = Column(Text)

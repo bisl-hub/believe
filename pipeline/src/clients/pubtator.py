@@ -118,25 +118,50 @@ class LiteratureClient:
         log.info(f"Searching PMIDs via Qwen-Retriever: '{query}'")
         try:
             # query might be a json string from the frontend or plain text
+            q_text = query
+            n = int(max_articles) if max_articles != float('inf') else 50
+            start_date = None
+            end_date = None
+            
             try:
                 payload = json.loads(query)
                 q_text = payload.get("q", query)
                 n = payload.get("n", 50)
                 if max_articles != float('inf'):
                     n = min(n, int(max_articles))
+                start_date = payload.get("start_date")
+                end_date = payload.get("end_date")
             except json.JSONDecodeError:
-                q_text = query
-                n = int(max_articles) if max_articles != float('inf') else 50
+                pass
                 
-            qwen_url = "http://neuron.uiyunkim.com:8001/search/pmids"
-            params = {"q": q_text, "n": n}
+            params: Dict[str, Union[str, int]] = {"q": q_text, "n": n}
             
-            resp = self._request("GET", qwen_url, params=params)
-            if not resp or resp.status_code != 200:
-                log.warning("Qwen-Retriever search failed. Returning empty list.")
-                return []
+            if start_date or end_date:
+                qwen_url = "http://neuron.uiyunkim.com:8001/search/date"
+                if start_date:
+                    params["start_date"] = start_date
+                if end_date:
+                    params["end_date"] = end_date
                 
-            pmids = resp.json().get("pmids", [])
+                resp = self._request("GET", qwen_url, params=params)
+                if not resp or resp.status_code != 200:
+                    log.warning("Qwen-Retriever date search failed. Returning empty list.")
+                    return []
+                    
+                # /search/date returns a list of objects like [{"id": "...", ...}]
+                results = resp.json()
+                pmids = [str(r.get("id")) for r in results if r.get("id")]
+                
+            else:
+                qwen_url = "http://neuron.uiyunkim.com:8001/search/pmids"
+                resp = self._request("GET", qwen_url, params=params)
+                if not resp or resp.status_code != 200:
+                    log.warning("Qwen-Retriever search failed. Returning empty list.")
+                    return []
+                    
+                # /search/pmids returns {"pmids": [...]}
+                pmids = resp.json().get("pmids", [])
+                
             log.info(f"Qwen-Retriever Search: Collected {len(pmids)} unique PMIDs.")
             
             return [str(p) for p in pmids]

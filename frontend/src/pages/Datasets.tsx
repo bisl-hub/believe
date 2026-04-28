@@ -32,6 +32,9 @@ export default function Datasets() {
     const [dsSourceType, setDsSourceType] = useState('pubtator3')
     const [dsQuery, setDsQuery] = useState('')
     const [dsQwenLimit, setDsQwenLimit] = useState(50)
+    const [dsDateMode, setDsDateMode] = useState('any') // 'any', 'after', 'before', 'range'
+    const [dsStartDate, setDsStartDate] = useState('')
+    const [dsEndDate, setDsEndDate] = useState('')
 
     const [isModalOpen, setIsModalOpen] = useState(false)
 
@@ -44,13 +47,36 @@ export default function Datasets() {
                 const parsed = JSON.parse(c.query)
                 setDsQuery(parsed.q || '')
                 setDsQwenLimit(parsed.n || 50)
+                if (parsed.start_date && parsed.end_date) {
+                    setDsDateMode('range')
+                    setDsStartDate(parsed.start_date)
+                    setDsEndDate(parsed.end_date)
+                } else if (parsed.start_date) {
+                    setDsDateMode('after')
+                    setDsStartDate(parsed.start_date)
+                    setDsEndDate('')
+                } else if (parsed.end_date) {
+                    setDsDateMode('before')
+                    setDsStartDate('')
+                    setDsEndDate(parsed.end_date)
+                } else {
+                    setDsDateMode('any')
+                    setDsStartDate('')
+                    setDsEndDate('')
+                }
             } catch (e) {
                 setDsQuery(c.query)
                 setDsQwenLimit(50)
+                setDsDateMode('any')
+                setDsStartDate('')
+                setDsEndDate('')
             }
         } else {
             setDsQuery(c.query)
             setDsQwenLimit(50)
+            setDsDateMode('any')
+            setDsStartDate('')
+            setDsEndDate('')
         }
         setIsModalOpen(true)
     }
@@ -61,6 +87,9 @@ export default function Datasets() {
         setDsSourceType('pubtator3')
         setDsQuery('')
         setDsQwenLimit(50)
+        setDsDateMode('any')
+        setDsStartDate('')
+        setDsEndDate('')
         setIsModalOpen(false)
     }
 
@@ -88,9 +117,19 @@ export default function Datasets() {
     const { mutate: createDs } = useMutation(async () => {
         if (!currentProject) throw new Error("No project selected")
 
-        const finalQuery = dsSourceType === 'qwen_retriever'
-            ? JSON.stringify({ q: dsQuery, n: dsQwenLimit })
-            : dsQuery;
+        let finalQuery = dsQuery;
+        if (dsSourceType === 'qwen_retriever') {
+            const payload: any = { q: dsQuery, n: dsQwenLimit };
+            if (dsDateMode === 'after' && dsStartDate) {
+                payload.start_date = dsStartDate;
+            } else if (dsDateMode === 'before' && dsEndDate) {
+                payload.end_date = dsEndDate;
+            } else if (dsDateMode === 'range' && dsStartDate && dsEndDate) {
+                payload.start_date = dsStartDate;
+                payload.end_date = dsEndDate;
+            }
+            finalQuery = JSON.stringify(payload);
+        }
 
         return await api.post('/configs/datasets', {
             project_id: currentProject.id,
@@ -110,9 +149,19 @@ export default function Datasets() {
     const { mutate: updateDs } = useMutation(async (id: number) => {
         if (!currentProject) throw new Error("No project selected")
 
-        const finalQuery = dsSourceType === 'qwen_retriever'
-            ? JSON.stringify({ q: dsQuery, n: dsQwenLimit })
-            : dsQuery;
+        let finalQuery = dsQuery;
+        if (dsSourceType === 'qwen_retriever') {
+            const payload: any = { q: dsQuery, n: dsQwenLimit };
+            if (dsDateMode === 'after' && dsStartDate) {
+                payload.start_date = dsStartDate;
+            } else if (dsDateMode === 'before' && dsEndDate) {
+                payload.end_date = dsEndDate;
+            } else if (dsDateMode === 'range' && dsStartDate && dsEndDate) {
+                payload.start_date = dsStartDate;
+                payload.end_date = dsEndDate;
+            }
+            finalQuery = JSON.stringify(payload);
+        }
 
         return await api.put(`/configs/datasets/${id}`, {
             project_id: currentProject.id,
@@ -186,10 +235,48 @@ export default function Datasets() {
                                     <label className="block text-sm font-medium text-slate-700 mb-1">Search Query</label>
                                     <input type="text" placeholder="e.g. Recent advances in cancer immunotherapy" value={dsQuery} onChange={e => setDsQuery(e.target.value)} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
                                 </div>
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Retrieval Limit (N)</label>
-                                    <input type="number" min="1" value={dsQwenLimit} onChange={e => setDsQwenLimit(parseInt(e.target.value))} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                <div className="grid grid-cols-2 gap-4 col-span-2">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Retrieval Limit (N)</label>
+                                        <input type="number" min="1" value={dsQwenLimit} onChange={e => setDsQwenLimit(parseInt(e.target.value))} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Date Filter</label>
+                                        <select value={dsDateMode} onChange={e => setDsDateMode(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2">
+                                            <option value="any">Any Date</option>
+                                            <option value="after">On or After Date</option>
+                                            <option value="before">On or Before Date</option>
+                                            <option value="range">Specific Date Range</option>
+                                        </select>
+                                    </div>
                                 </div>
+
+                                {dsDateMode === 'after' && (
+                                    <div className="col-span-2">
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">Start Date (YYYYMMDD)</label>
+                                        <input type="text" placeholder="e.g. 20230101" value={dsStartDate} onChange={e => setDsStartDate(e.target.value)} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                    </div>
+                                )}
+
+                                {dsDateMode === 'before' && (
+                                    <div className="col-span-2">
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">End Date (YYYYMMDD)</label>
+                                        <input type="text" placeholder="e.g. 20231231" value={dsEndDate} onChange={e => setDsEndDate(e.target.value)} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                    </div>
+                                )}
+
+                                {dsDateMode === 'range' && (
+                                    <div className="col-span-2 grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">Start Date (YYYYMMDD)</label>
+                                            <input type="text" placeholder="e.g. 20230101" value={dsStartDate} onChange={e => setDsStartDate(e.target.value)} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-700 mb-1">End Date (YYYYMMDD)</label>
+                                            <input type="text" placeholder="e.g. 20231231" value={dsEndDate} onChange={e => setDsEndDate(e.target.value)} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                        </div>
+                                    </div>
+                                )}
                             </>
                         ) : (
                             <div>
@@ -303,7 +390,11 @@ export default function Datasets() {
                                             (() => {
                                                 try {
                                                     const parsed = JSON.parse(c.query);
-                                                    return `"${parsed.q}" (Limit: ${parsed.n})`;
+                                                    let filters = [];
+                                                    if (parsed.start_date) filters.push(`start_date>=${parsed.start_date}`);
+                                                    if (parsed.end_date) filters.push(`end_date<=${parsed.end_date}`);
+                                                    const filtersStr = filters.length > 0 ? ` [${filters.join(' ')}]` : '';
+                                                    return `"${parsed.q}" (Limit: ${parsed.n})${filtersStr}`;
                                                 } catch (e) { return c.query; }
                                             })()
                                         ) : c.query}
