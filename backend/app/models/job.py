@@ -56,7 +56,7 @@ class JobResult(Base):
     __tablename__ = "job_results"
 
     id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("jobs.id"))
+    job_id = Column(Integer, ForeignKey("jobs.id"), index=True)
     pmid = Column(String)
     title = Column(String)
     abstract = Column(Text)

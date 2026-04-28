@@ -1,3 +1,4 @@
 postgres_data_backup/
 postgres_data/
 .env
+__pycache__

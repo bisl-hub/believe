@@ -42,26 +42,29 @@ class QueueManager:
             time.sleep(2)
 
     def _process_queue(self):
+        max_concurrent_jobs = 10
         db: Session = SessionLocal()
         try:
-            # 1. Check if ANY job is currently RUNNING
-            running_job = db.query(job_model.Job).filter(job_model.Job.status == job_model.JobStatus.RUNNING).first()
+            # 1. Check and monitor all currently RUNNING jobs
+            running_jobs = db.query(job_model.Job).filter(job_model.Job.status == job_model.JobStatus.RUNNING).all()
             
-            if running_job:
-                # A job is running (or supposed to be). Monitor it.
+            for running_job in running_jobs:
                 self._monitor_running_job(db, running_job)
-            else:
-                # No running job. Pick the next QUEUED job.
-                next_job = db.query(job_model.Job)\
+
+            # Re-evaluate running jobs count after monitoring
+            running_count = db.query(job_model.Job).filter(job_model.Job.status == job_model.JobStatus.RUNNING).count()
+            
+            if running_count < max_concurrent_jobs:
+                # Capacity available. Pick the next QUEUED job(s).
+                available_slots = max_concurrent_jobs - running_count
+                next_jobs = db.query(job_model.Job)\
                     .filter(job_model.Job.status == job_model.JobStatus.QUEUED)\
                     .order_by(job_model.Job.created_at.asc())\
-                    .first()
+                    .limit(available_slots)\
+                    .all()
                 
-                if next_job:
+                for next_job in next_jobs:
                     self._start_job(db, next_job)
-                else:
-                    # Nothing to do
-                    pass
 
         finally:
             db.close()

@@ -109,7 +109,12 @@ def get_jobs(project_id: int, exclude_download: bool = True, page: int = None, l
 
 @router.get("/{job_id}", response_model=job_schema.JobResponse)
 def get_job(job_id: int, current_user: user_model.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    job = db.query(job_model.Job).filter(job_model.Job.id == job_id).first()
+    from sqlalchemy.orm import defer
+    job = db.query(job_model.Job).options(
+        defer(job_model.Job.logs),
+        defer(job_model.Job.result_csv),
+        defer(job_model.Job.summary_image)
+    ).filter(job_model.Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         

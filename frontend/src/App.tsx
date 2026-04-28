@@ -8,6 +8,7 @@ import History from './pages/History'
 import Datasets from './pages/Datasets'
 import Configs from './pages/Configs'
 import ProjectSettings from './pages/ProjectSettings'
+import ApiDocs from './pages/ApiDocs'
 import Layout from './components/Layout'
 import { ProjectProvider } from './lib/ProjectContext'
 
@@ -45,6 +46,7 @@ function RootRedirect() {
 function App() {
   return (
     <Routes>
+      <Route path="/api-docs" element={<ApiDocs />} />
       <Route path="/login" element={<Login />} />
       <Route path="/" element={
         <ProtectedRoute>

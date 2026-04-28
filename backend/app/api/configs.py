@@ -314,23 +314,27 @@ def delete_dataset_config(
         
     check_project_access(config.project_id, current_user.id, db)
         
-    # Find active download jobs for this dataset's query
-    active_jobs = db.query(job_model.Job).filter(
+    # Find all download jobs for this dataset's query (active and completed)
+    all_jobs = db.query(job_model.Job).filter(
         job_model.Job.project_id == config.project_id,
         job_model.Job.query_term == config.query,
-        job_model.Job.job_type == job_model.JobType.DOWNLOAD,
-        job_model.Job.status.in_([job_model.JobStatus.RUNNING, job_model.JobStatus.QUEUED])
+        job_model.Job.job_type == job_model.JobType.DOWNLOAD
     ).all()
     
-    for job in active_jobs:
+    for job in all_jobs:
         if job.status == job_model.JobStatus.RUNNING and job.container_id:
             try:
                 docker_service.stop_job(job.container_id)
             except Exception as e:
                 print(f"Error stopping container for job {job.id}: {e}")
         
-        job.status = job_model.JobStatus.STOPPED
-        job.finished_at = datetime.utcnow()
+        # Delete the job completely so recreating the dataset triggers a new download
+        db.delete(job)
+        
+    # Invalidate the QueryCache so the pipeline doesn't reuse the old results
+    from ..models.config import QueryCache
+    if config.query:
+        db.query(QueryCache).filter(QueryCache.query_term == config.query).delete()
     
     db.delete(config)
     db.commit()
