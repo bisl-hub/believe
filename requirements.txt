@@ -1,7 +1,0 @@
-tqdm
-httpx
-openai
-matplotlib
-langfuse
-sqlalchemy
-psycopg2-binary

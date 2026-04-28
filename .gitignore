@@ -1,4 +1,8 @@
 postgres_data_backup/
 postgres_data/
 .env
-__pycache__
+**/__pycache__/
+*.pyc
+*.pyo
+frontend/dist/
+frontend/node_modules/
