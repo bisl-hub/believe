@@ -1,8 +1,148 @@
-postgres_data_backup/
-postgres_data/
+# ---------------------------------------------------------------------------
+# Secrets & environment
+# ---------------------------------------------------------------------------
 .env
-**/__pycache__/
-*.pyc
-*.pyo
-frontend/dist/
-frontend/node_modules/
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials.json
+service-account*.json
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.conda/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# Node / frontend
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+build/
+.vite/
+*.tsbuildinfo
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ---------------------------------------------------------------------------
+# Go — compiled worker binary (built inside pipeline/Dockerfile)
+# ---------------------------------------------------------------------------
+pipeline/src/llm_worker/llm_worker
+*.exe
+*.test
+*.out
+
+# ---------------------------------------------------------------------------
+# Database volumes & dumps
+# ---------------------------------------------------------------------------
+postgres_data/
+postgres_data_backup/
+*.sql.gz
+*.dump
+*.sqlite
+*.sqlite3
+*.db
+
+# ---------------------------------------------------------------------------
+# eval/ — keep the scripts and result figures, drop regenerable bulk
+# ---------------------------------------------------------------------------
+eval/**/data/
+eval/**/runs/
+eval/**/.hf_cache/
+eval/**/cache/
+eval/**/*.log
+
+# ---------------------------------------------------------------------------
+# Large / generated artifacts (models, indexes, datasets)
+# ---------------------------------------------------------------------------
+*.faiss
+*.index
+*.arrow
+*.parquet
+*.feather
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.bin
+*.gguf
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# ---------------------------------------------------------------------------
+# Logs & runtime scratch
+# ---------------------------------------------------------------------------
+*.log
+logs/
+*.pid
+*.seed
+*.lock
+!package-lock.json
+!poetry.lock
+!uv.lock
+tmp/
+temp/
+.scratch/
+
+# ---------------------------------------------------------------------------
+# Editors & OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
