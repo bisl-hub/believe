@@ -9,6 +9,7 @@ import Datasets from './pages/Datasets'
 import Configs from './pages/Configs'
 import ProjectSettings from './pages/ProjectSettings'
 import ApiDocs from './pages/ApiDocs'
+import UserSettings from './pages/UserSettings'
 import Layout from './components/Layout'
 import { ProjectProvider } from './lib/ProjectContext'
 
@@ -47,6 +48,11 @@ function App() {
   return (
     <Routes>
       <Route path="/api-docs" element={<ApiDocs />} />
+      <Route path="/user-settings" element={
+        <ProtectedRoute>
+          <UserSettings />
+        </ProtectedRoute>
+      } />
       <Route path="/login" element={<Login />} />
       <Route path="/" element={
         <ProtectedRoute>

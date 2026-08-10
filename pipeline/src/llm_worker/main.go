@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -71,7 +72,12 @@ func main() {
 	// through the HAProxy/LiteLLM. By forcing thousands of physical HTTP/1.1 TCP 
 	// connections (MaxConnsPerHost), we force the downstream proxy to balance
 	// the traffic across all 8 vLLM servers instead of funneling it into 1.
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 15 * time.Second,
+	}
 	transport := &http.Transport{
+		DialContext:         dialer.DialContext,
 		MaxIdleConns:        concurrencyLimit * 2,
 		MaxIdleConnsPerHost: concurrencyLimit * 2,
 		MaxConnsPerHost:     concurrencyLimit * 2,

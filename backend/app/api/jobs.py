@@ -357,7 +357,7 @@ def download_job_csv(job_id: int, token: str, db: Session = Depends(get_db)):
         try:
             output = StringIO()
             writer = csv.writer(output)
-            writer.writerow(["pmid", "title", "year", "abstract", "verdict", "confidence", "rationale"])
+            writer.writerow(["pmid", "title", "year", "abstract", "verdict", "confidence", "rationale", "qwen_rank", "qwen_score"])
             yield output.getvalue()
             output.seek(0)
             output.truncate(0)
@@ -369,7 +369,7 @@ def download_job_csv(job_id: int, token: str, db: Session = Depends(get_db)):
                 if not results:
                     break
                 for r in results:
-                    writer.writerow([r.pmid, r.title, r.year, r.abstract, r.verdict, r.confidence, r.rationale])
+                    writer.writerow([r.pmid, r.title, r.year, r.abstract, r.verdict, r.confidence, r.rationale, r.qwen_rank, r.qwen_score])
                 yield output.getvalue()
                 output.seek(0)
                 output.truncate(0)

@@ -279,7 +279,23 @@ export default function Configs() {
 
                     <section className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
                         <h3 className="text-lg font-semibold mt-8">Saved Analysis Configs</h3>
-                        {acLoading ? <p>Loading...</p> : (
+                        {acLoading ? <p>Loading...</p> : analysisConfigs?.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-16 text-center">
+                                <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+                                    <svg className="w-7 h-7 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                    </svg>
+                                </div>
+                                <p className="text-sm font-medium text-slate-600 mb-1">No analysis configs yet</p>
+                                <p className="text-xs text-slate-400 mb-5">Save a hypothesis + dataset pairing to reuse across jobs.</p>
+                                <button
+                                    onClick={() => { handleCancelEditAc(); setIsAnalysisModalOpen(true) }}
+                                    className="text-sm px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors"
+                                >
+                                    Create Analysis Config
+                                </button>
+                            </div>
+                        ) : (
                             <div className="grid gap-4">
                                 {analysisConfigs?.map((c: any) => (
                                     <div key={c.id} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex justify-between items-center transition-all hover:border-slate-300">
@@ -374,7 +390,23 @@ export default function Configs() {
 
                     <section className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
                         <h3 className="text-lg font-semibold mt-8">Saved Model Configs</h3>
-                        {mcLoading ? <p>Loading...</p> : (
+                        {mcLoading ? <p>Loading...</p> : modelConfigs?.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-16 text-center">
+                                <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+                                    <svg className="w-7 h-7 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                    </svg>
+                                </div>
+                                <p className="text-sm font-medium text-slate-600 mb-1">No model configs yet</p>
+                                <p className="text-xs text-slate-400 mb-5">Save an LLM endpoint and settings to reuse across jobs.</p>
+                                <button
+                                    onClick={() => { handleCancelEditMc(); setIsModelModalOpen(true) }}
+                                    className="text-sm px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors"
+                                >
+                                    Create Model Config
+                                </button>
+                            </div>
+                        ) : (
                             <div className="grid gap-4 mt-4">
                                 {modelConfigs?.map((c: any) => (
                                     <div key={c.id} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex justify-between items-center transition-all hover:border-slate-300">

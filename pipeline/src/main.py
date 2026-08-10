@@ -5,6 +5,7 @@ import socket
 import csv
 import io
 import math
+import time
 import matplotlib
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -47,17 +48,20 @@ DB_URL = None
 def _ensure_output_directory() -> None:
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
-def write_results_csv(evaluations: Sequence[ArticleEvaluation]) -> None:
+def write_results_csv(evaluations: Sequence[ArticleEvaluation], qwen_ranking: Dict[str, Dict] = None) -> None:
     _ensure_output_directory()
-    fieldnames = ["pmid", "title", "verdict", "confidence", "rationale", "hypothesis", "abstract", "year"]
+    qwen_ranking = qwen_ranking or {}
+    fieldnames = ["pmid", "title", "verdict", "confidence", "rationale", "hypothesis", "abstract", "year", "qwen_rank", "qwen_score"]
     with OUTPUT_CSV_PATH.open("w", encoding=CSV_ENCODING, newline=CSV_NEWLINE) as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for item in evaluations:
+            rank_info = qwen_ranking.get(str(item.pmid), {})
             writer.writerow({
                 "pmid": item.pmid, "title": item.title, "verdict": item.verdict,
                 "confidence": item.confidence, "rationale": item.rationale,
-                "hypothesis": item.hypothesis, "abstract": item.abstract, "year": item.year
+                "hypothesis": item.hypothesis, "abstract": item.abstract, "year": item.year,
+                "qwen_rank": rank_info.get("rank"), "qwen_score": rank_info.get("score")
             })
     log.info(f"Saved CSV results to {OUTPUT_CSV_PATH}")
 
@@ -85,42 +89,64 @@ def summarize_verdicts(evaluations: Sequence[ArticleEvaluation]) -> Dict[str, in
         counts[item.verdict] = counts.get(item.verdict, 0) + 1
     return counts
 
-def write_results_db(evaluations: List[ArticleEvaluation], job_id: int, db_url: str, counts: Dict[str, int]) -> None:
+DB_WRITE_MAX_RETRIES = 6
+DB_WRITE_BASE_DELAY = 2.0  # seconds; exponential backoff: 2, 4, 8, 16, 32, 64
+
+def write_results_db(evaluations: List[ArticleEvaluation], job_id: int, db_url: str, counts: Dict[str, int], qwen_ranking: Dict[str, Dict] = None) -> None:
     log.info(f"Writing {len(evaluations)} results to database for Job {job_id}...")
-    
-    engine = create_engine(db_url)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db = SessionLocal()
-    
-    try:
-        # Convert to raw dictionaries for massive speedup in bulk insert
-        records = [
-            {
-                "job_id": job_id,
-                "pmid": eval_item.pmid,
-                "title": eval_item.title,
-                "abstract": eval_item.abstract,
-                "verdict": eval_item.verdict,
-                "confidence": eval_item.confidence,
-                "rationale": eval_item.rationale,
-                "year": eval_item.year
-            }
-            for eval_item in evaluations
-        ]
-        
-        chunk_size = 10000
-        for i in range(0, len(records), chunk_size):
-            chunk = records[i:i + chunk_size]
-            db.bulk_insert_mappings(JobResult, chunk)
-            
-        db.commit()
-        log.info("Database write successful.")
-    except Exception as e:
-        log.error(f"Database write failed: {e}")
-        db.rollback()
-        raise e
-    finally:
-        db.close()
+
+    qwen_ranking = qwen_ranking or {}
+
+    # Convert to raw dictionaries once for massive speedup in bulk insert
+    records = [
+        {
+            "job_id": job_id,
+            "pmid": eval_item.pmid,
+            "title": eval_item.title,
+            "abstract": eval_item.abstract,
+            "verdict": eval_item.verdict,
+            "confidence": eval_item.confidence,
+            "rationale": eval_item.rationale,
+            "year": eval_item.year,
+            "qwen_rank": qwen_ranking.get(str(eval_item.pmid), {}).get("rank"),
+            "qwen_score": qwen_ranking.get(str(eval_item.pmid), {}).get("score"),
+        }
+        for eval_item in evaluations
+    ]
+
+    # Retry with exponential backoff: under concurrent load the Postgres
+    # connection slots can be momentarily exhausted ("too many clients
+    # already"). The results are already computed, so we must not drop them
+    # on a transient connection failure — retry until a slot frees up.
+    last_exc = None
+    for attempt in range(1, DB_WRITE_MAX_RETRIES + 1):
+        # Fresh engine per attempt so a poisoned pool from a failed connect
+        # doesn't linger; pre_ping validates the connection before use.
+        engine = create_engine(db_url, pool_pre_ping=True)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        db = SessionLocal()
+        try:
+            chunk_size = 10000
+            for i in range(0, len(records), chunk_size):
+                chunk = records[i:i + chunk_size]
+                db.bulk_insert_mappings(JobResult, chunk)
+            db.commit()
+            log.info("Database write successful." + (f" (attempt {attempt})" if attempt > 1 else ""))
+            return
+        except Exception as e:
+            last_exc = e
+            db.rollback()
+            if attempt < DB_WRITE_MAX_RETRIES:
+                delay = DB_WRITE_BASE_DELAY * (2 ** (attempt - 1))
+                log.warning(f"Database write attempt {attempt}/{DB_WRITE_MAX_RETRIES} failed ({e}). Retrying in {delay:.0f}s...")
+                time.sleep(delay)
+            else:
+                log.error(f"Database write failed after {DB_WRITE_MAX_RETRIES} attempts: {e}")
+        finally:
+            db.close()
+            engine.dispose()
+
+    raise last_exc
 
 def run_pipeline(query: str, hypothesis: str, source_type: str = "pubtator3", max_articles: float = float('inf'), max_articles_percent: float = None, pmids: List[str] = None, download_only: bool = False, force_refresh: bool = False):
     log.info("=" * 60)
@@ -177,6 +203,8 @@ def run_pipeline(query: str, hypothesis: str, source_type: str = "pubtator3", ma
     # --- 3. DATA ACQUISITION & CACHE ---
     log.info("\n=== [3] DATA ACQUISITION & CACHE ===")
     articles = []
+    # {pmid -> {"rank": int, "score": float}} from the Qwen retriever, if used.
+    qwen_ranking: Dict[str, Dict] = {}
     
     # If source_type is txt_file and no explicit PMIDs passed via CLI, parsing query string as PMIDs
     if source_type == "txt_file" and not pmids:
@@ -195,6 +223,12 @@ def run_pipeline(query: str, hypothesis: str, source_type: str = "pubtator3", ma
                 if cached_query and cached_query.pmids:
                     pmids = json.loads(cached_query.pmids)
                     log.info(f" ╰─ DB Cache Hit (Query Level): Successfully recovered {len(pmids)} PMIDs mapped to this exact query.")
+                    if getattr(cached_query, "rankings", None):
+                        try:
+                            qwen_ranking = json.loads(cached_query.rankings)
+                            log.info(f"     └─ Recovered Qwen ranking (rank/score) for {len(qwen_ranking)} PMIDs from cache.")
+                        except Exception as e:
+                            log.warning(f"     └─ Failed to parse cached Qwen ranking: {e}")
                     if max_articles != float('inf') and max_articles > 0:
                         pmids = pmids[:int(max_articles)]
                         log.info(f"     └─ Limiting Target: Reduced to Top {int(max_articles)} PMIDs to satisfy user constraints.")
@@ -226,6 +260,7 @@ def run_pipeline(query: str, hypothesis: str, source_type: str = "pubtator3", ma
                 pmids = client.search_pmids_via_pubmed(query, max_articles=max_articles, max_articles_percent=max_articles_percent)
             elif source_type == "qwen_retriever":
                 pmids = client.search_pmids_via_qwen_retriever(query, max_articles=max_articles)
+                qwen_ranking = client.last_qwen_ranking or {}
             else:
                 pmids = client.search_pmids_via_pubtator(query, max_articles=max_articles, max_articles_percent=max_articles_percent)
         log.info(f"     └─ Search Complete: Discovered {len(pmids) if pmids else 0} new PMIDs to process.")
@@ -237,11 +272,14 @@ def run_pipeline(query: str, hypothesis: str, source_type: str = "pubtator3", ma
             SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
             db = SessionLocal()
             try:
+                rankings_json = json.dumps(qwen_ranking) if qwen_ranking else None
                 existing_cache = db.query(QueryCache).filter(QueryCache.query_term == query).first()
                 if not existing_cache:
-                    db.add(QueryCache(query_term=query, pmids=json.dumps(pmids)))
+                    db.add(QueryCache(query_term=query, pmids=json.dumps(pmids), rankings=rankings_json))
                 else:
                     existing_cache.pmids = json.dumps(pmids)
+                    if rankings_json is not None:
+                        existing_cache.rankings = rankings_json
                 db.commit()
                 log.info(f"     └─ Query Cache Sync: Saved {len(pmids)} PMIDs to DB for future jobs.")
             except Exception as e:
@@ -322,15 +360,15 @@ def run_pipeline(query: str, hypothesis: str, source_type: str = "pubtator3", ma
         log.info(f"Results: Support({counts['support']}) / Reject({counts['reject']}) / Neutral({counts['neutral']})")
     
     try:
-        write_results_csv(evaluations)
+        write_results_csv(evaluations, qwen_ranking=qwen_ranking)
         if not download_only:
             write_summary_figure(counts)
     except Exception as e:
         log.error(f"Failed to write results to files: {e}")
-    
+
     if JOB_ID and DB_URL:
         try:
-            write_results_db(evaluations, JOB_ID, DB_URL, counts)
+            write_results_db(evaluations, JOB_ID, DB_URL, counts, qwen_ranking=qwen_ranking)
         except Exception as e:
             log.error(f"Failed to write results to DB: {e}")
     else:

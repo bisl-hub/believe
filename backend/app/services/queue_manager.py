@@ -1,8 +1,10 @@
 import threading
 import time
 import docker
+from collections import Counter
 from datetime import datetime
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError, ObjectDeletedError
 from ..db.session import SessionLocal
 from ..models import job as job_model
 from ..services.docker_service import docker_service
@@ -41,30 +43,71 @@ class QueueManager:
             # Simple polling interval
             time.sleep(2)
 
+    # Concurrency is budgeted PER model serving name (job.openai_model) rather
+    # than globally, so a large backlog for one model can't block jobs for
+    # another. No global ceiling — total running = per_model_limit x #models.
+    PER_MODEL_LIMIT = 32
+
+    @staticmethod
+    def _queue_key(job: job_model.Job) -> str:
+        # The model serving name is the queue key. Download-only jobs carry
+        # "none" and thus share their own bucket.
+        return job.openai_model or "none"
+
     def _process_queue(self):
-        max_concurrent_jobs = 10
         db: Session = SessionLocal()
         try:
             # 1. Check and monitor all currently RUNNING jobs
             running_jobs = db.query(job_model.Job).filter(job_model.Job.status == job_model.JobStatus.RUNNING).all()
-            
-            for running_job in running_jobs:
-                self._monitor_running_job(db, running_job)
 
-            # Re-evaluate running jobs count after monitoring
-            running_count = db.query(job_model.Job).filter(job_model.Job.status == job_model.JobStatus.RUNNING).count()
-            
-            if running_count < max_concurrent_jobs:
-                # Capacity available. Pick the next QUEUED job(s).
-                available_slots = max_concurrent_jobs - running_count
+            for running_job in running_jobs:
+                # Isolate each job: a row deleted out from under us (e.g. the
+                # dataset was deleted mid-run) must not abort the whole pass.
+                try:
+                    self._monitor_running_job(db, running_job)
+                except (StaleDataError, ObjectDeletedError):
+                    print(f"QueueManager: Job {running_job.id} row vanished during monitoring; skipping.")
+                    db.rollback()
+                except Exception as e:
+                    print(f"QueueManager: Error monitoring Job {running_job.id}: {e}")
+                    db.rollback()
+
+            # 2. Count how many jobs are RUNNING per model serving name.
+            running_now = db.query(job_model.Job).filter(job_model.Job.status == job_model.JobStatus.RUNNING).all()
+            running_per_model = Counter(self._queue_key(j) for j in running_now)
+
+            # 3. For each model that has QUEUED work, start up to its remaining
+            #    per-model slots. Each model is an independent queue.
+            queued_models = [
+                m for (m,) in db.query(job_model.Job.openai_model)
+                                .filter(job_model.Job.status == job_model.JobStatus.QUEUED)
+                                .distinct()
+                                .all()
+            ]
+
+            for model in queued_models:
+                key = model or "none"
+                slots = self.PER_MODEL_LIMIT - running_per_model[key]
+                if slots <= 0:
+                    continue
+
                 next_jobs = db.query(job_model.Job)\
-                    .filter(job_model.Job.status == job_model.JobStatus.QUEUED)\
+                    .filter(job_model.Job.status == job_model.JobStatus.QUEUED,
+                            job_model.Job.openai_model == model)\
                     .order_by(job_model.Job.created_at.asc())\
-                    .limit(available_slots)\
+                    .limit(slots)\
                     .all()
-                
+
                 for next_job in next_jobs:
-                    self._start_job(db, next_job)
+                    try:
+                        self._start_job(db, next_job)
+                        running_per_model[key] += 1
+                    except (StaleDataError, ObjectDeletedError):
+                        print(f"QueueManager: Job {next_job.id} row vanished before start; skipping.")
+                        db.rollback()
+                    except Exception as e:
+                        print(f"QueueManager: Error starting Job {next_job.id}: {e}")
+                        db.rollback()
 
         finally:
             db.close()
@@ -135,9 +178,14 @@ class QueueManager:
                     print(f"Error fetching logs for Job {job.id}: {e}")
 
                 db.commit()
+
+                # Remove the container now that we have the logs and final status
+                try:
+                    container.remove()
+                except Exception as e:
+                    print(f"QueueManager: Failed to remove container for Job {job.id}: {e}")
             else:
                 # Still running, do nothing (wait for next loop)
-                # Maybe periodically update logs? Not strictly necessary if frontend pulls live.
                 pass
 
         except docker.errors.NotFound:
@@ -150,6 +198,11 @@ class QueueManager:
                  # Unexpected loss
                  job.status = job_model.JobStatus.FAILED
                  db.commit()
+
+        except (StaleDataError, ObjectDeletedError):
+            # The job row was deleted concurrently (e.g. dataset removed).
+            # Let the caller roll back and move on.
+            raise
 
         except Exception as e:
             print(f"QueueManager: Error monitoring Job {job.id}: {e}")

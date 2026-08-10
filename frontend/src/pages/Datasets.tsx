@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from 'react-query'
 import { useNavigate } from 'react-router-dom'
 import api from '../lib/axios'
 import Modal from '../components/Modal'
+import Pagination from '../components/Pagination'
 import { useProject } from '../lib/ProjectContext'
+
+const PAGE_SIZE = 20
 
 export default function Datasets() {
     const queryClient = useQueryClient()
@@ -32,11 +35,13 @@ export default function Datasets() {
     const [dsSourceType, setDsSourceType] = useState('pubtator3')
     const [dsQuery, setDsQuery] = useState('')
     const [dsQwenLimit, setDsQwenLimit] = useState(50)
+    const [dsQwenModelId, setDsQwenModelId] = useState('')
     const [dsDateMode, setDsDateMode] = useState('any') // 'any', 'after', 'before', 'range'
     const [dsStartDate, setDsStartDate] = useState('')
     const [dsEndDate, setDsEndDate] = useState('')
 
     const [isModalOpen, setIsModalOpen] = useState(false)
+    const [page, setPage] = useState(1)
 
     const handleEdit = (c: any) => {
         setEditingDsId(c.id)
@@ -47,6 +52,7 @@ export default function Datasets() {
                 const parsed = JSON.parse(c.query)
                 setDsQuery(parsed.q || '')
                 setDsQwenLimit(parsed.n || 50)
+                setDsQwenModelId(parsed.model_id || '')
                 if (parsed.start_date && parsed.end_date) {
                     setDsDateMode('range')
                     setDsStartDate(parsed.start_date)
@@ -87,11 +93,17 @@ export default function Datasets() {
         setDsSourceType('pubtator3')
         setDsQuery('')
         setDsQwenLimit(50)
+        setDsQwenModelId('')
         setDsDateMode('any')
         setDsStartDate('')
         setDsEndDate('')
         setIsModalOpen(false)
     }
+
+    const { data: qwenModels } = useQuery('qwenModels', async () => {
+        const res = await api.get('/configs/qwen-models')
+        return res.data as { id: string; display_name: string }[]
+    }, { retry: false, staleTime: 60000 })
 
     const { data: datasetConfigs, isLoading: dsLoading } = useQuery(['datasetConfigs', currentProject?.id], async () => {
         if (!currentProject) return []
@@ -101,6 +113,12 @@ export default function Datasets() {
         enabled: !!currentProject,
         refetchInterval: 3000
     })
+
+    const totalPages = useMemo(() => Math.max(1, Math.ceil((datasetConfigs?.length ?? 0) / PAGE_SIZE)), [datasetConfigs])
+    const pagedDatasets = useMemo(() => {
+        if (!datasetConfigs) return []
+        return datasetConfigs.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+    }, [datasetConfigs, page])
 
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
@@ -120,6 +138,7 @@ export default function Datasets() {
         let finalQuery = dsQuery;
         if (dsSourceType === 'qwen_retriever') {
             const payload: any = { q: dsQuery, n: dsQwenLimit };
+            if (dsQwenModelId) payload.model_id = dsQwenModelId;
             if (dsDateMode === 'after' && dsStartDate) {
                 payload.start_date = dsStartDate;
             } else if (dsDateMode === 'before' && dsEndDate) {
@@ -142,6 +161,7 @@ export default function Datasets() {
             setDsName('')
             setDsQuery('')
             setIsModalOpen(false)
+            setPage(1)
             queryClient.invalidateQueries('datasetConfigs')
         }
     })
@@ -152,6 +172,7 @@ export default function Datasets() {
         let finalQuery = dsQuery;
         if (dsSourceType === 'qwen_retriever') {
             const payload: any = { q: dsQuery, n: dsQwenLimit };
+            if (dsQwenModelId) payload.model_id = dsQwenModelId;
             if (dsDateMode === 'after' && dsStartDate) {
                 payload.start_date = dsStartDate;
             } else if (dsDateMode === 'before' && dsEndDate) {
@@ -178,6 +199,15 @@ export default function Datasets() {
 
     const { mutate: deleteDs } = useMutation(async (id: number) => {
         return await api.delete(`/configs/datasets/${id}`)
+    }, {
+        onSuccess: () => queryClient.invalidateQueries('datasetConfigs')
+    })
+
+    // Force a fresh download, bypassing the query/result cache. Use this to
+    // re-fetch a dataset whose previous download is stale (e.g. it was capped
+    // at the old retrieval limit).
+    const { mutate: forceDownloadDs, isLoading: isForcing } = useMutation(async (id: number) => {
+        return await api.post(`/configs/datasets/${id}/force_download`)
     }, {
         onSuccess: () => queryClient.invalidateQueries('datasetConfigs')
     })
@@ -216,7 +246,7 @@ export default function Datasets() {
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">Source Type</label>
-                            <select value={dsSourceType} onChange={e => { setDsSourceType(e.target.value); setDsQuery(''); setDsQwenLimit(50); }} className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2">
+                            <select value={dsSourceType} onChange={e => { setDsSourceType(e.target.value); setDsQuery(''); setDsQwenLimit(50); setDsQwenModelId(''); }} className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2">
                                 <option value="txt_file">Local TXT File (PMIDs)</option>
                                 <option value="pubtator3">PubTator3 Query</option>
                                 <option value="pubmed">PubMed Server Query</option>
@@ -239,6 +269,22 @@ export default function Datasets() {
                                     <div>
                                         <label className="block text-sm font-medium text-slate-700 mb-1">Retrieval Limit (N)</label>
                                         <input type="number" min="1" value={dsQwenLimit} onChange={e => setDsQwenLimit(parseInt(e.target.value))} required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                                            Embedding Model
+                                            {!qwenModels && <span className="ml-1 text-xs text-slate-400">(fetching...)</span>}
+                                        </label>
+                                        <select
+                                            value={dsQwenModelId}
+                                            onChange={e => setDsQwenModelId(e.target.value)}
+                                            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-2"
+                                        >
+                                            <option value="">Default (server picks)</option>
+                                            {qwenModels?.map(m => (
+                                                <option key={m.id} value={m.id}>{m.display_name}</option>
+                                            ))}
+                                        </select>
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-slate-700 mb-1">Date Filter</label>
@@ -319,7 +365,12 @@ export default function Datasets() {
             </Modal>
 
             <section className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <h3 className="text-xl font-bold text-slate-900 mb-6">Saved Datasets</h3>
+                <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-xl font-bold text-slate-900">Saved Datasets</h3>
+                    {!dsLoading && datasetConfigs?.length > 0 && (
+                        <span className="text-sm text-slate-400">{datasetConfigs.length} total</span>
+                    )}
+                </div>
                 {dsLoading ? (
                     <div className="grid gap-4 animate-pulse">
                         {[1, 2, 3].map((i) => (
@@ -341,7 +392,7 @@ export default function Datasets() {
                     </div>
                 ) : (
                     <div className="grid gap-4">
-                        {datasetConfigs?.map((c: any) => (
+                        {pagedDatasets.map((c: any) => (
                             <div
                                 key={c.id}
                                 onClick={() => c.download_job_id ? navigate(`/${currentProject?.id}/jobs/${c.download_job_id}`) : null}
@@ -391,16 +442,31 @@ export default function Datasets() {
                                                 try {
                                                     const parsed = JSON.parse(c.query);
                                                     let filters = [];
-                                                    if (parsed.start_date) filters.push(`start_date>=${parsed.start_date}`);
-                                                    if (parsed.end_date) filters.push(`end_date<=${parsed.end_date}`);
-                                                    const filtersStr = filters.length > 0 ? ` [${filters.join(' ')}]` : '';
-                                                    return `"${parsed.q}" (Limit: ${parsed.n})${filtersStr}`;
+                                                    if (parsed.model_id) filters.push(`model: ${parsed.model_id}`);
+                                                    if (parsed.start_date) filters.push(`start≥${parsed.start_date}`);
+                                                    if (parsed.end_date) filters.push(`end≤${parsed.end_date}`);
+                                                    const filtersStr = filters.length > 0 ? ` [${filters.join(', ')}]` : '';
+                                                    return `"${parsed.q}" (n=${parsed.n})${filtersStr}`;
                                                 } catch (e) { return c.query; }
                                             })()
                                         ) : c.query}
                                     </p>
                                 </div>
                                 <div className="space-x-2 pl-4 flex-shrink-0 flex items-center">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (confirm('Re-download this dataset from scratch? This bypasses the cache and re-fetches all articles for the query.')) {
+                                                forceDownloadDs(c.id);
+                                            }
+                                        }}
+                                        disabled={isForcing || c.download_job_status === 'running' || c.download_job_status === 'queued'}
+                                        className="text-sm px-4 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 font-medium z-10 relative transition-colors flex items-center gap-1.5 shadow-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title="Re-download from scratch, ignoring cached results"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                                        Re-download
+                                    </button>
                                     <button onClick={(e) => { e.stopPropagation(); handleEdit(c); }} className="text-sm px-4 py-2 bg-slate-50 text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 hover:text-blue-600 font-medium z-10 relative transition-colors flex items-center gap-1.5 shadow-sm whitespace-nowrap">
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                         Edit
@@ -410,6 +476,7 @@ export default function Datasets() {
                         ))}
                     </div>
                 )}
+                <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
             </section>
         </div>
     )

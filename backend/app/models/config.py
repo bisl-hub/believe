@@ -70,6 +70,7 @@ class QueryCache(Base):
     id = Column(Integer, primary_key=True, index=True)
     query_term = Column(String, index=True, unique=True)
     pmids = Column(Text) # comma-separated list of PMIDs, or JSON structured text
+    rankings = Column(Text, nullable=True) # JSON {pmid: {"rank": int, "score": float}} for qwen_retriever
     last_updated = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 class ArticleCache(Base):

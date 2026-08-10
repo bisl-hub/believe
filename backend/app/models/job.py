@@ -64,5 +64,8 @@ class JobResult(Base):
     confidence = Column(String)
     rationale = Column(Text)
     year = Column(String)
-    
+    # Retrieval ranking from the Qwen retriever (null for other source types)
+    qwen_rank = Column(Integer, nullable=True)
+    qwen_score = Column(Float, nullable=True)
+
     job = relationship("Job", back_populates="results")

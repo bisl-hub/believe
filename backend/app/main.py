@@ -8,6 +8,24 @@ from .models import api_key  # ensure table is registered before create_all
 # DB Init
 Base.metadata.create_all(bind=engine)
 
+def _run_lightweight_migrations():
+    """create_all does not add columns to pre-existing tables. Apply
+    idempotent ALTERs for columns introduced after the table first shipped."""
+    from sqlalchemy import text
+    statements = [
+        "ALTER TABLE job_results ADD COLUMN IF NOT EXISTS qwen_rank INTEGER",
+        "ALTER TABLE job_results ADD COLUMN IF NOT EXISTS qwen_score DOUBLE PRECISION",
+        "ALTER TABLE query_cache ADD COLUMN IF NOT EXISTS rankings TEXT",
+    ]
+    with engine.begin() as conn:
+        for stmt in statements:
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                pass
+
+_run_lightweight_migrations()
+
 app = FastAPI(title="Hypothesis Validation Service")
 
 # CORS

@@ -34,6 +34,9 @@ class JobResult(Base):
     confidence = Column(String)
     rationale = Column(Text)
     year = Column(String)
+    # Retrieval ranking from the Qwen retriever (null for other source types)
+    qwen_rank = Column(Integer, nullable=True)
+    qwen_score = Column(Float, nullable=True)
 
 class Job(Base):
     __tablename__ = "jobs"
@@ -51,6 +54,8 @@ class QueryCache(Base):
     id = Column(Integer, primary_key=True, index=True)
     query_term = Column(String, index=True, unique=True)
     pmids = Column(Text)
+    # JSON {pmid: {"rank": int, "score": float}} for qwen_retriever queries
+    rankings = Column(Text, nullable=True)
 
 class ArticleCache(Base):
     __tablename__ = "article_cache"

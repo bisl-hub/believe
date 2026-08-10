@@ -25,9 +25,17 @@ PUBMED_FETCH_CHUNK_SIZE = 200
 FETCH_THREAD_COUNT = int(os.getenv("FETCH_THREAD_COUNT", "8"))
 
 NCBI_MAX_REQUESTS_PER_SECOND = float(os.getenv("NCBI_MAX_REQUESTS_PER_SECOND", "3.0"))
-HTTP_TIMEOUT_SEC = float(os.getenv("HTTP_TIMEOUT_SEC", "180.0"))
+QWEN_RETRIEVER_BASE_URL = os.getenv("QWEN_RETRIEVER_BASE_URL", "http://neuron.uiyunkim.com:8001")
+# Qwen retrieval can take very long for large `n`; allow up to 3 hours.
+QWEN_RETRIEVER_TIMEOUT_SEC = float(os.getenv("QWEN_RETRIEVER_TIMEOUT_SEC", "10800.0"))
+HTTP_TIMEOUT_SEC = float(os.getenv("HTTP_TIMEOUT_SEC", "3600.0"))
+# Hard errors (5xx / network) give up after MAX_RETRIES. Rate-limit (429)
+# responses get their own, much larger budget with exponential backoff so a
+# throttled job waits it out instead of dying in ~60s.
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "30"))
+RATE_LIMIT_MAX_RETRIES = int(os.getenv("RATE_LIMIT_MAX_RETRIES", "1000"))
 RETRY_BACKOFF_BASE_SEC = float(os.getenv("RETRY_BACKOFF_BASE_SEC", "2.0"))
+RETRY_MAX_WAIT_SEC = float(os.getenv("RETRY_MAX_WAIT_SEC", "120.0"))
 NCBI_API_KEY = os.getenv("NCBI_API_KEY")
 
 HEADERS = {
@@ -64,6 +72,8 @@ class LiteratureClient:
         limits = httpx.Limits(max_connections=50, max_keepalive_connections=20)
         self._client = httpx.Client(timeout=timeout, limits=limits, headers=HEADERS)
         self._limiter = RateLimiter(NCBI_MAX_REQUESTS_PER_SECOND)
+        # Populated by search_pmids_via_qwen_retriever: {pmid -> {"rank": int, "score": float}}
+        self.last_qwen_ranking: Dict[str, Dict[str, Union[int, float]]] = {}
 
     def close(self) -> None:
         self._client.close()
@@ -74,55 +84,86 @@ class LiteratureClient:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
-    def _request(self, method: str, url: str, params: Dict[str, Union[str, int]], data: Dict = None) -> httpx.Response:
+    def _request(self, method: str, url: str, params: Dict[str, Union[str, int]], data: Dict = None, timeout: float = None) -> httpx.Response:
         # Inject API Key for NCBI/PubMed domains
         if NCBI_API_KEY and ("ncbi.nlm.nih.gov" in url or "pubtator3-api" in url):
             params["api_key"] = NCBI_API_KEY
 
-        for attempt in range(1, MAX_RETRIES + 1):
+        request_timeout = httpx.Timeout(timeout) if timeout is not None else httpx.USE_CLIENT_DEFAULT
+
+        # Two independent budgets: hard errors (5xx / network) give up quickly,
+        # but 429 rate-limits keep retrying with exponential backoff + jitter so
+        # a throttled job just waits it out (thundering-herd is spread by jitter).
+        hard_failures = 0
+        rate_limit_hits = 0
+        attempt = 0
+        while True:
+            attempt += 1
             self._limiter.wait()
             try:
                 if method.upper() == "POST":
-                    response = self._client.post(url, data=data, params=params)
+                    response = self._client.post(url, data=data, params=params, timeout=request_timeout)
                 else:
-                    response = self._client.get(url, params=params)
-                
+                    response = self._client.get(url, params=params, timeout=request_timeout)
+
                 if response.status_code == 429:
                     raise httpx.HTTPStatusError("Rate Limit", request=response.request, response=response)
-                
+
                 if response.status_code >= 500:
                     response.raise_for_status()
-                    
+
                 return response
 
             except httpx.HTTPError as exc:
-                if attempt == MAX_RETRIES:
-                    log.warning(f"Request failed after {MAX_RETRIES} attempts: {exc}")
-                    return None
-                
-                wait_time = min(60.0, RETRY_BACKOFF_BASE_SEC * (1.5 ** attempt))
-                if isinstance(exc, httpx.HTTPStatusError):
-                    status_code = exc.response.status_code
-                    response_text = exc.response.text[:200]
-                    log.error(f"     └─ [HTTP ERROR] Status: {status_code}, Response: {response_text}")
-                    if status_code == 429:
-                        header_wait = exc.response.headers.get("Retry-After")
-                        if header_wait:
-                            wait_time = float(header_wait)
-                
-                log.info(f"Request attempt {attempt}/{MAX_RETRIES} failed ({type(exc).__name__}). Retrying in {wait_time:.1f}s...")
+                is_rate_limit = (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code == 429
+                )
+
+                if is_rate_limit:
+                    rate_limit_hits += 1
+                    if rate_limit_hits >= RATE_LIMIT_MAX_RETRIES:
+                        log.warning(f"Request still rate-limited after {rate_limit_hits} attempts, giving up: {url}")
+                        return None
+                    # Exponential backoff on the number of 429s seen so far,
+                    # capped. Retry-After (if sent) is treated as a *floor*, not
+                    # an override, so the wait still grows over time.
+                    backoff = RETRY_BACKOFF_BASE_SEC * (2 ** min(rate_limit_hits, 8))
+                    wait_time = min(RETRY_MAX_WAIT_SEC, backoff)
+                    header_wait = exc.response.headers.get("Retry-After")
+                    if header_wait:
+                        try:
+                            wait_time = max(wait_time, float(header_wait))
+                        except ValueError:
+                            pass
+                    # Jitter (±25%) so concurrent workers don't retry in lockstep.
+                    wait_time += random.uniform(-0.25, 0.25) * wait_time
+                    log.error(f"     └─ [RATE LIMIT 429] {url} — {exc.response.text[:200]}")
+                    log.info(f"Rate-limited (429 #{rate_limit_hits}). Backing off {wait_time:.1f}s...")
+                else:
+                    hard_failures += 1
+                    if hard_failures >= MAX_RETRIES:
+                        log.warning(f"Request failed after {hard_failures} attempts: {exc}")
+                        return None
+                    backoff = RETRY_BACKOFF_BASE_SEC * (2 ** min(hard_failures, 8))
+                    wait_time = min(RETRY_MAX_WAIT_SEC, backoff)
+                    wait_time += random.uniform(0, 0.25) * wait_time
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        log.error(f"     └─ [HTTP ERROR] {url} Status: {exc.response.status_code}, Response: {exc.response.text[:200]}")
+                    log.info(f"Request attempt {hard_failures}/{MAX_RETRIES} failed ({type(exc).__name__}). Retrying in {wait_time:.1f}s...")
+
                 time.sleep(wait_time)
-        return None
 
     def search_pmids_via_qwen_retriever(self, query: str, max_articles: float = float('inf')) -> List[str]:
         log.info(f"Searching PMIDs via Qwen-Retriever: '{query}'")
+        self.last_qwen_ranking = {}
         try:
-            # query might be a json string from the frontend or plain text
             q_text = query
             n = int(max_articles) if max_articles != float('inf') else 50
             start_date = None
             end_date = None
-            
+            model_id = None
+
             try:
                 payload = json.loads(query)
                 q_text = payload.get("q", query)
@@ -131,40 +172,47 @@ class LiteratureClient:
                     n = min(n, int(max_articles))
                 start_date = payload.get("start_date")
                 end_date = payload.get("end_date")
+                model_id = payload.get("model_id")
             except json.JSONDecodeError:
                 pass
-                
-            params: Dict[str, Union[str, int]] = {"q": q_text, "n": n}
-            
-            if start_date or end_date:
-                qwen_url = "http://neuron.uiyunkim.com:8001/search/date"
-                if start_date:
-                    params["start_date"] = start_date
-                if end_date:
-                    params["end_date"] = end_date
-                
-                resp = self._request("GET", qwen_url, params=params)
-                if not resp or resp.status_code != 200:
-                    log.warning("Qwen-Retriever date search failed. Returning empty list.")
-                    return []
-                    
-                # /search/date returns a list of objects like [{"id": "...", ...}]
-                results = resp.json()
-                pmids = [str(r.get("id")) for r in results if r.get("id")]
-                
-            else:
-                qwen_url = "http://neuron.uiyunkim.com:8001/search/pmids"
-                resp = self._request("GET", qwen_url, params=params)
-                if not resp or resp.status_code != 200:
-                    log.warning("Qwen-Retriever search failed. Returning empty list.")
-                    return []
-                    
-                # /search/pmids returns {"pmids": [...]}
-                pmids = resp.json().get("pmids", [])
-                
-            log.info(f"Qwen-Retriever Search: Collected {len(pmids)} unique PMIDs.")
-            
-            return [str(p) for p in pmids]
+
+            QWEN_MAX_N = 5000000
+            if n > QWEN_MAX_N:
+                log.info(f"  ╰─ Capping n={n} to server max {QWEN_MAX_N}")
+                n = QWEN_MAX_N
+
+            qwen_url = f"{QWEN_RETRIEVER_BASE_URL}/search"
+            params: Dict[str, Union[str, int]] = {"q": q_text, "n": n, "include_content": "false"}
+            if start_date:
+                params["start_date"] = start_date
+            if end_date:
+                params["end_date"] = end_date
+            if model_id:
+                params["model_id"] = model_id
+
+            log.info(f"  ╰─ Qwen URL: {qwen_url}, model_id={model_id or '(default)'}, n={n}")
+
+            resp = self._request("GET", qwen_url, params=params, timeout=QWEN_RETRIEVER_TIMEOUT_SEC)
+            if not resp or resp.status_code != 200:
+                log.warning("Qwen-Retriever search failed. Returning empty list.")
+                return []
+
+            results = resp.json()
+            pmids = []
+            ranking: Dict[str, Dict[str, Union[int, float]]] = {}
+            for idx, r in enumerate(results):
+                rid = r.get("id")
+                if not rid:
+                    continue
+                pmid = str(rid)
+                pmids.append(pmid)
+                # Server returns results in descending score order, so the
+                # list position (1-based) is the retrieval rank.
+                ranking[pmid] = {"rank": idx + 1, "score": r.get("score")}
+            self.last_qwen_ranking = ranking
+
+            log.info(f"Qwen-Retriever Search: Collected {len(pmids)} unique PMIDs (with rank/score).")
+            return pmids
         except Exception as e:
             log.error(f"Error connecting to Qwen-Retriever: {e}")
             return []

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Copy, ChevronDown, ChevronRight, Terminal, Zap, Database, Settings, FlaskConical, BookOpen, Key, Code2, Play } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Copy, ChevronDown, ChevronRight, Terminal, Zap, Database, Settings, FlaskConical, BookOpen, Key, Code2, Play, FileText, Download, BookMarked } from 'lucide-react'
 
 const BASE_URL = `${window.location.origin}/api/v1`
 const BASE_ORIGIN = window.location.origin
@@ -16,13 +16,13 @@ function useClipboard(ms = 1800) {
     return { copied, copy }
 }
 
-type Lang = 'python' | 'bash' | 'json' | 'text'
+type Lang = 'python' | 'bash' | 'json' | 'text' | 'markdown'
 
 function CodeBlock({ code, id, lang = 'python' }: { code: string; id: string; lang?: Lang }) {
     const { copied, copy } = useClipboard()
-    const langLabel: Record<Lang, string> = { python: 'Python', bash: 'Shell', json: 'JSON', text: 'Text' }
+    const langLabel: Record<Lang, string> = { python: 'Python', bash: 'Shell', json: 'JSON', text: 'Text', markdown: 'Markdown' }
     const langColor: Record<Lang, string> = {
-        python: 'text-blue-400', bash: 'text-emerald-400', json: 'text-amber-400', text: 'text-slate-400'
+        python: 'text-blue-400', bash: 'text-emerald-400', json: 'text-amber-400', text: 'text-slate-400', markdown: 'text-violet-400'
     }
     return (
         <div className="relative group rounded-xl overflow-hidden border border-slate-700">
@@ -223,11 +223,23 @@ for d in datasets:
 ── 다른 source_type ─────────────────────────────────────────────────
   pubtator3   — @CHEMICAL_Dopamine AND @DISEASE_Schizophrenia
   pubmed      — dopamine schizophrenia[MeSH Terms]
-  txt_file    — "12345678,23456789,34567890"  (PMID 목록 직접 입력)`,
+  txt_file    — "12345678,23456789,34567890"  (PMID 목록 직접 입력)
+
+── model_id ──────────────────────────────────────────────────────────
+  qwen_retriever 서버에 등록된 임베딩 모델 ID (생략 시 서버 기본값 사용)
+  예: "Qwen__Qwen3-Embedding-0.6B"
+  사용 가능한 모델 목록: GET /api/configs/qwen-models
+
+── force_refresh ────────────────────────────────────────────────────
+  false (기본): 같은 query로 이미 completed/queued/running 잡이 있으면 재사용
+  true: 기존 잡 무시하고 새 Force-Download 잡을 즉시 큐에 올림
+        PMID 캐시도 우회해 retriever에서 새로 가져옴
+        → qwen_retriever 인덱스 갱신 후 재다운로드할 때 사용`,
                 body: JSON.stringify({
                     name: 'DA & SZ — Qwen Semantic (n=1000)',
                     source_type: 'qwen_retriever',
-                    query: '{"q": "dopamine neurotransmission schizophrenia nucleus accumbens caudate", "n": 1000}',
+                    query: '{"q": "dopamine neurotransmission schizophrenia nucleus accumbens caudate", "n": 1000, "model_id": "Qwen__Qwen3-Embedding-0.6B"}',
+                    force_refresh: false,
                 }, null, 2),
                 response: JSON.stringify({
                     id: 88, name: 'DA & SZ — Qwen Semantic (n=1000)', source_type: 'qwen_retriever',
@@ -242,39 +254,72 @@ import json
 qwen_query = json.dumps({
     "q": "dopamine neurotransmission schizophrenia nucleus accumbens caudate",
     "n": 1000,
+    "model_id": "Qwen__Qwen3-Embedding-0.6B",  # GET /api/configs/qwen-models 로 목록 조회
     # "start_date": "2010-01-01",  # 선택: 날짜 범위 필터
     # "end_date":   "2024-12-31",
 })
 
+# 일반 생성 (캐시 재사용)
 dataset = requests.post(f"{BASE_URL}/datasets", headers=HEADERS, json={
     "name":        "DA & SZ — Qwen Semantic (n=1000)",
     "source_type": "qwen_retriever",
     "query":       qwen_query,
 }).json()
 
+# qwen_retriever 인덱스 갱신 후 강제 재다운로드
+# dataset = requests.post(f"{BASE_URL}/datasets", headers=HEADERS, json={
+#     "name":          "DA & SZ — Qwen Semantic (n=1000)",
+#     "source_type":   "qwen_retriever",
+#     "query":         qwen_query,
+#     "force_refresh": True,   # 기존 잡·캐시 무시하고 retriever에서 새로 가져옴
+# }).json()
+
 print(f"Dataset {dataset['id']} created")
 print(f"Download job {dataset['download_job_id']} is {dataset['download_job_status']}")`,
-                curl: String.raw`curl -X POST ${BASE_URL}/datasets \
+                curl: String.raw`# 일반 생성
+curl -X POST ${BASE_URL}/datasets \
   -H "X-Api-Key: blv_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "DA & SZ — Qwen Semantic (n=1000)",
     "source_type": "qwen_retriever",
     "query": "{\"q\": \"dopamine neurotransmission schizophrenia nucleus accumbens caudate\", \"n\": 1000}"
+  }'
+
+# retriever 인덱스 갱신 후 강제 재다운로드
+curl -X POST ${BASE_URL}/datasets \
+  -H "X-Api-Key: blv_your_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "DA & SZ — Qwen Semantic (n=1000)",
+    "source_type": "qwen_retriever",
+    "query": "{\"q\": \"dopamine neurotransmission schizophrenia nucleus accumbens caudate\", \"n\": 1000}",
+    "force_refresh": true
   }'`,
             },
             {
                 method: 'POST', path: '/api/v1/datasets/{config_id}/pre-download', summary: 'Trigger pre-download',
-                description: '다운로드 전용 job을 큐에 올립니다. 데이터셋 생성 시 자동으로 큐에 올라가지만, 강제 재다운로드가 필요할 때 사용합니다.',
-                params: [{ name: 'config_id', type: 'integer', required: true, description: 'Dataset config ID' }],
+                description: `다운로드 전용 job을 큐에 올립니다. 데이터셋 생성 시 자동으로 큐에 올라가지만, 수동으로 재다운로드가 필요할 때 사용합니다.
+
+force_refresh=true: PMID 캐시를 무시하고 retriever에서 새로 가져옵니다.
+qwen_retriever 인덱스가 업데이트된 경우 이 옵션을 사용하세요.`,
+                params: [
+                    { name: 'config_id', type: 'integer', required: true, description: 'Dataset config ID' },
+                    { name: 'force_refresh', type: 'boolean', description: 'true이면 PMID 캐시를 우회하고 retriever에서 새로 가져옴 (qwen_retriever 인덱스 갱신 후 사용)', default: 'false' },
+                ],
                 response: JSON.stringify({ message: 'Pre-download job queued', job_id: 445 }, null, 2),
                 python: `${PY_SETUP}
 import time
 
 DATASET_ID = 88
 
-# 재다운로드 트리거
-r = requests.post(f"{BASE_URL}/datasets/{DATASET_ID}/pre-download", headers=HEADERS).json()
+# 일반 재다운로드 (캐시 사용)
+# r = requests.post(f"{BASE_URL}/datasets/{DATASET_ID}/pre-download", headers=HEADERS).json()
+
+# qwen_retriever 인덱스 갱신 후 강제 재다운로드 (캐시 무시)
+r = requests.post(f"{BASE_URL}/datasets/{DATASET_ID}/pre-download",
+                  headers=HEADERS,
+                  params={"force_refresh": True}).json()
 dl_job_id = r["job_id"]
 print(f"Download job {dl_job_id} queued")
 
@@ -285,7 +330,12 @@ while True:
     if job["status"] in ("completed", "failed", "stopped"):
         break
     time.sleep(10)`,
-                curl: `curl -X POST ${BASE_URL}/datasets/88/pre-download \\
+                curl: `# 일반 재다운로드
+curl -X POST ${BASE_URL}/datasets/88/pre-download \\
+  -H "X-Api-Key: blv_your_key_here"
+
+# 캐시 무시하고 강제 재다운로드 (retriever 인덱스 갱신 후)
+curl -X POST "${BASE_URL}/datasets/88/pre-download?force_refresh=true" \\
   -H "X-Api-Key: blv_your_key_here"`,
             },
             {
@@ -510,7 +560,11 @@ source_type:
   qwen_retriever  — 자연어 의미 기반 검색 (권장)
   pubtator3       — @CHEMICAL_X AND @DISEASE_Y 형식
   pubmed          — PubMed/MeSH 키워드 쿼리
-  txt_file        — PMID 목록 직접 입력`,
+  txt_file        — PMID 목록 직접 입력
+
+force_refresh:
+  true이면 DB에 캐시된 PMID 목록을 무시하고 retriever에서 새로 가져옵니다.
+  qwen_retriever 인덱스가 갱신된 후 같은 query로 재실행할 때 사용합니다.`,
                 body: JSON.stringify({
                     name: 'DA Hypothesis — Qwen 1000',
                     query_term: '{"q": "dopamine neurotransmission schizophrenia nucleus accumbens caudate", "n": 1000}',
@@ -518,6 +572,7 @@ source_type:
                     source_type: 'qwen_retriever',
                     max_articles: 1000,
                     model_config_id: 16,
+                    force_refresh: false,
                 }, null, 2),
                 response: JSON.stringify({ id: 446, status: 'queued', name: 'DA Hypothesis — Qwen 1000', created_at: '2026-04-28T06:44:17Z' }, null, 2),
                 python: `${PY_SETUP}
@@ -539,6 +594,9 @@ job = requests.post(f"{BASE_URL}/jobs", headers=HEADERS, json={
 
     # 저장된 model config 사용 (권장)
     "model_config_id": 16,
+
+    # qwen_retriever 인덱스 갱신 후 캐시 우회 재실행:
+    # "force_refresh": True,
 
     # 또는 직접 지정:
     # "openai_api_key":        "your-key",
@@ -889,11 +947,112 @@ plt.tight_layout()
 plt.savefig("trend.png", dpi=150)
 print("Saved trend.png")`
 
+// ─── Markdown export ──────────────────────────────────────────────────────────
+// Generated from the same SECTIONS / example data above so the Markdown view
+// never drifts from the rich docs.
+
+const HTTP_STATUS: [string, string][] = [
+    ['200', 'Success'], ['401', 'Invalid/missing API key'], ['403', 'Permission denied'],
+    ['404', 'Resource not found'], ['422', 'Validation error'], ['500', 'Server error'],
+]
+
+const fence = (code: string, lang: string) => '```' + lang + '\n' + code + '\n```'
+
+function buildMarkdown(): string {
+    const out: string[] = []
+    const push = (s = '') => out.push(s)
+
+    push('# Believe API Reference')
+    push()
+    push(`Base URL: \`${BASE_URL}\``)
+    push()
+
+    // Authentication
+    push('## Authentication')
+    push()
+    push('Every request must include a project-scoped API key in the `X-Api-Key` header. '
+        + 'Keys are created in **Project Settings → API Keys**. A key grants full access to its '
+        + 'project — treat it like a password.')
+    push()
+    push('Key format: `blv_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2` (52 chars). '
+        + 'The full key is shown only once at creation — store it as an environment variable or secret.')
+    push()
+    push(fence(PY_SETUP, 'python'))
+    push()
+    push('### HTTP status codes')
+    push()
+    push('| Code | Meaning |')
+    push('| --- | --- |')
+    HTTP_STATUS.forEach(([code, msg]) => push(`| ${code} | ${msg} |`))
+    push()
+
+    // Complete examples
+    push('## Complete Python Examples')
+    push()
+    push('### Quickstart — run a job end-to-end')
+    push()
+    push(fence(EXAMPLE_QUICKSTART, 'python'))
+    push()
+    push('### Batch runner — compare multiple queries')
+    push()
+    push(fence(EXAMPLE_BATCH, 'python'))
+    push()
+    push('### Pandas analysis — EDA + charts')
+    push()
+    push(fence(EXAMPLE_PANDAS, 'python'))
+    push()
+
+    // Endpoint reference
+    push('## Endpoint Reference')
+    push()
+    SECTIONS.forEach(sec => {
+        push(`### ${sec.title}`)
+        push()
+        push(sec.description)
+        push()
+        sec.endpoints.forEach(ep => {
+            push(`#### \`${ep.method} ${ep.path}\` — ${ep.summary}`)
+            push()
+            if (ep.description) { push(ep.description); push() }
+            if (ep.params && ep.params.length > 0) {
+                push('**Parameters**')
+                push()
+                push('| Name | Type | Required | Default | Description |')
+                push('| --- | --- | --- | --- | --- |')
+                ep.params.forEach(p => push(
+                    `| \`${p.name}\` | ${p.type} | ${p.required ? 'yes' : ''} | ${p.default ?? ''} | ${p.description} |`
+                ))
+                push()
+            }
+            if (ep.body) { push('**Request Body**'); push(); push(fence(ep.body, 'json')); push() }
+            if (ep.response) { push('**Response**'); push(); push(fence(ep.response, 'json')); push() }
+            if (ep.python) { push('**Example (Python)**'); push(); push(fence(ep.python, 'python')); push() }
+            if (ep.curl) { push('**Example (curl)**'); push(); push(fence(ep.curl, 'bash')); push() }
+        })
+    })
+
+    return out.join('\n')
+}
+
+function downloadMarkdown(md: string) {
+    const blob = new Blob([md], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'believe-api-reference.md'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ApiDocs() {
     const [activeSections, setActiveSections] = useState<Set<string>>(new Set(['jobs']))
     const [activeExample, setActiveExample] = useState<'quickstart' | 'batch' | 'pandas'>('quickstart')
+    const [showMarkdown, setShowMarkdown] = useState(false)
+    const markdown = useMemo(() => buildMarkdown(), [])
 
     const toggleSection = (id: string) => {
         setActiveSections(prev => {
@@ -919,17 +1078,49 @@ export default function ApiDocs() {
                             </p>
                         </div>
                     </div>
-                    <a
-                        href={`${BASE_ORIGIN}/${window.location.pathname.split('/')[1]}/settings`}
-                        className="text-xs text-violet-600 hover:underline font-medium hidden md:block"
-                    >
-                        Generate API Key →
-                    </a>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => setShowMarkdown(m => !m)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+                            title={showMarkdown ? 'Show interactive docs' : 'View as Markdown'}
+                        >
+                            {showMarkdown
+                                ? <><BookMarked size={14} /> Docs</>
+                                : <><FileText size={14} /> Markdown</>}
+                        </button>
+                        <a
+                            href={`${BASE_ORIGIN}/${window.location.pathname.split('/')[1]}/settings`}
+                            className="text-xs text-violet-600 hover:underline font-medium hidden md:block"
+                        >
+                            Generate API Key →
+                        </a>
+                    </div>
                 </div>
             </div>
 
             <div className="max-w-5xl mx-auto px-6 py-8 space-y-8">
 
+                {showMarkdown ? (
+                    <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+                            <div className="flex items-center gap-2">
+                                <FileText size={18} className="text-violet-600" />
+                                <h2 className="text-base font-bold text-slate-800">Markdown</h2>
+                                <span className="text-xs text-slate-400 ml-1 hidden md:block">the full reference as a single Markdown document</span>
+                            </div>
+                            <button
+                                onClick={() => downloadMarkdown(markdown)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 transition-colors shrink-0"
+                            >
+                                <Download size={14} /> Download .md
+                            </button>
+                        </div>
+                        <div className="p-6">
+                            <CodeBlock code={markdown} id="full-markdown" lang="markdown" />
+                        </div>
+                    </section>
+                ) : (
+                <>
                 {/* Auth */}
                 <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
                     <div className="flex items-center gap-2 mb-4">
@@ -1064,6 +1255,8 @@ export default function ApiDocs() {
                         ))}
                     </div>
                 </div>
+                </>
+                )}
 
                 <footer className="text-center text-xs text-slate-400 pb-6">
                     Believe API — keys never expire unless manually revoked · project-scoped access only

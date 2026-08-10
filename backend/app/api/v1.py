@@ -36,6 +36,7 @@ class V1DatasetCreate(BaseModel):
     name: str
     source_type: str
     query: str
+    force_refresh: bool = False
 
 class V1ModelConfigCreate(BaseModel):
     name: str
@@ -149,28 +150,35 @@ def v1_create_dataset(
 
     `source_type` options: `pubtator3`, `pubmed`, `qwen_retriever`, `txt_file`
     """
-    new_config = DatasetConfig(**body.dict(), project_id=project.id, owner_id=project.owner_id)
+    new_config = DatasetConfig(
+        **body.dict(exclude={"force_refresh"}),
+        project_id=project.id,
+        owner_id=project.owner_id,
+    )
     db.add(new_config)
 
-    existing_job = (
-        db.query(job_model.Job)
-        .filter(
-            job_model.Job.project_id == project.id,
-            job_model.Job.job_type == job_model.JobType.DOWNLOAD,
-            job_model.Job.query_term == body.query,
-            job_model.Job.status.in_([
-                job_model.JobStatus.COMPLETED,
-                job_model.JobStatus.QUEUED,
-                job_model.JobStatus.RUNNING,
-            ]),
+    existing_job = None
+    if not body.force_refresh:
+        existing_job = (
+            db.query(job_model.Job)
+            .filter(
+                job_model.Job.project_id == project.id,
+                job_model.Job.job_type == job_model.JobType.DOWNLOAD,
+                job_model.Job.query_term == body.query,
+                job_model.Job.status.in_([
+                    job_model.JobStatus.COMPLETED,
+                    job_model.JobStatus.QUEUED,
+                    job_model.JobStatus.RUNNING,
+                ]),
+            )
+            .first()
         )
-        .first()
-    )
 
+    job_name_prefix = "Force-Download" if body.force_refresh else "Pre-Download"
     new_job = None
     if not existing_job:
         new_job = job_model.Job(
-            name=f"Pre-Download: {body.name}",
+            name=f"{job_name_prefix}: {body.name}",
             project_id=project.id,
             query_term=body.query,
             hypothesis="N/A (Download Only Job)",
@@ -266,18 +274,24 @@ def v1_delete_dataset(
 @router.post("/datasets/{config_id}/pre-download", summary="Trigger dataset pre-download")
 def v1_predownload_dataset(
     config_id: int,
+    force_refresh: bool = Query(False, description="Bypass cache and re-fetch PMIDs from the retriever"),
     project: Project = Depends(_resolve_project),
     db: Session = Depends(get_db),
 ):
-    """Queue a job that downloads all PMIDs/abstracts for this dataset query."""
+    """Queue a job that downloads all PMIDs/abstracts for this dataset query.
+
+    Set `force_refresh=true` to bypass the PMID cache and re-fetch from the
+    retriever (useful after the retriever index is updated).
+    """
     cfg = db.query(DatasetConfig).filter(
         DatasetConfig.id == config_id, DatasetConfig.project_id == project.id
     ).first()
     if not cfg:
         raise HTTPException(status_code=404, detail="Dataset config not found")
 
+    job_name_prefix = "Force-Download" if force_refresh else "Pre-Download"
     new_job = job_model.Job(
-        name=f"Pre-Download: {cfg.name}",
+        name=f"{job_name_prefix}: {cfg.name}",
         project_id=project.id,
         query_term=cfg.query,
         hypothesis="N/A (Download Only Job)",
@@ -442,6 +456,7 @@ class V1JobCreate(BaseModel):
     llm_concurrency_limit: Optional[int] = 1024
     llm_temperature: Optional[float] = 0.0
     model_config_id: Optional[int] = None
+    force_refresh: bool = False
 
 
 @router.post("/jobs", response_model=job_schema.JobResponse, summary="Create analysis job")
@@ -480,9 +495,15 @@ def v1_create_job(
         concurrency = concurrency if concurrency != 1024 else (saved.llm_concurrency_limit or 1024)
         temperature = temperature if temperature != 0.0 else (saved.llm_temperature or 0.0)
 
+    job_name = body.name
+    if body.force_refresh and job_name and not job_name.startswith("Force-Download:"):
+        job_name = f"Force-Download: {job_name}"
+    elif body.force_refresh and not job_name:
+        job_name = f"Force-Download: {body.query_term}"
+
     new_job = job_model.Job(
         project_id=project.id,
-        name=body.name,
+        name=job_name,
         query_term=body.query_term,
         hypothesis=body.hypothesis,
         max_articles=float("inf") if body.max_articles == -1 else body.max_articles,
@@ -582,6 +603,28 @@ def v1_stop_job(
     return {"message": "Job stopped"}
 
 
+@router.delete("/jobs/{job_id}", summary="Delete a job and all its results")
+def v1_delete_job(
+    job_id: int,
+    project: Project = Depends(_resolve_project),
+    db: Session = Depends(get_db),
+):
+    job = db.query(job_model.Job).filter(
+        job_model.Job.id == job_id, job_model.Job.project_id == project.id
+    ).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status == job_model.JobStatus.RUNNING and job.container_id:
+        try:
+            docker_service.stop_job(job.container_id)
+        except Exception:
+            pass
+    db.query(job_model.JobResult).filter(job_model.JobResult.job_id == job_id).delete()
+    db.delete(job)
+    db.commit()
+    return {"message": "Job deleted"}
+
+
 @router.get("/jobs/{job_id}/logs", summary="Get job logs")
 def v1_get_job_logs(
     job_id: int,
@@ -636,6 +679,8 @@ def v1_get_job_results(
         "verdict": job_model.JobResult.verdict,
         "pmid": job_model.JobResult.pmid,
         "title": job_model.JobResult.title,
+        "qwen_rank": job_model.JobResult.qwen_rank,
+        "qwen_score": job_model.JobResult.qwen_score,
     }
 
     if sort_by == "confidence":
@@ -659,6 +704,7 @@ def v1_get_job_results(
                 "pmid": r.pmid, "title": r.title, "year": r.year,
                 "abstract": r.abstract, "verdict": r.verdict,
                 "confidence": r.confidence, "rationale": r.rationale,
+                "qwen_rank": r.qwen_rank, "qwen_score": r.qwen_score,
             }
             for r in items
         ],
@@ -753,7 +799,7 @@ def v1_download_csv(
         try:
             buf = StringIO()
             writer = csv.writer(buf)
-            writer.writerow(["pmid", "title", "year", "abstract", "verdict", "confidence", "rationale"])
+            writer.writerow(["pmid", "title", "year", "abstract", "verdict", "confidence", "rationale", "qwen_rank", "qwen_score"])
             yield buf.getvalue()
             buf.seek(0); buf.truncate(0)
             offset, chunk = 0, 5000
@@ -767,7 +813,7 @@ def v1_download_csv(
                 if not rows:
                     break
                 for r in rows:
-                    writer.writerow([r.pmid, r.title, r.year, r.abstract, r.verdict, r.confidence, r.rationale])
+                    writer.writerow([r.pmid, r.title, r.year, r.abstract, r.verdict, r.confidence, r.rationale, r.qwen_rank, r.qwen_score])
                 yield buf.getvalue()
                 buf.seek(0); buf.truncate(0)
                 offset += chunk

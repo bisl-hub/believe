@@ -1,3 +1,5 @@
+import os
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List
@@ -11,6 +13,8 @@ from ..schemas import config as config_schema
 from .users import get_current_user
 from ..services.docker_service import docker_service
 from datetime import datetime
+
+QWEN_RETRIEVER_BASE_URL = os.getenv("QWEN_RETRIEVER_BASE_URL", "http://neuron.uiyunkim.com:8001")
 
 router = APIRouter()
 
@@ -411,3 +415,18 @@ def force_download_dataset_data(
     db.refresh(new_job)
     
     return {"message": "Force-download Job created.", "job_id": new_job.id}
+
+
+# --- Qwen Retriever proxy ---
+
+@router.get("/qwen-models")
+def get_qwen_models(current_user: user_model.User = Depends(get_current_user)):
+    """Proxy GET {QWEN_RETRIEVER_BASE_URL}/api/models and return only ready models."""
+    try:
+        resp = httpx.get(f"{QWEN_RETRIEVER_BASE_URL}/api/models", timeout=5.0)
+        resp.raise_for_status()
+        models = resp.json()
+        return [m for m in models if m.get("status") == "ready"]
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Qwen Retriever unavailable: {e}")
+

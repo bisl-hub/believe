@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
-import { Beaker, History, LogOut, Settings, Sliders, Database, FolderPlus, ChevronDown, Check } from 'lucide-react'
+import { Beaker, History, LogOut, Settings, Sliders, Database, FolderPlus, ChevronDown, Check, Github, UserCog, FileText } from 'lucide-react'
 import clsx from 'clsx'
 import { useProject } from '../lib/ProjectContext'
 import api from '../lib/axios'
@@ -139,13 +139,36 @@ export default function Layout() {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-200">
+        <div className="p-4 border-t border-slate-200 space-y-1">
+          <a
+            href="/user-settings"
+            className="flex items-center gap-3 px-4 py-2.5 w-full text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-lg transition-colors"
+          >
+            <UserCog size={18} />
+            <span className="text-sm font-medium">Account</span>
+          </a>
+          <a
+            href="/api-docs"
+            className="flex items-center gap-3 px-4 py-2.5 w-full text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-lg transition-colors"
+          >
+            <FileText size={18} />
+            <span className="text-sm font-medium">API Docs</span>
+          </a>
+          <a
+            href="https://github.com/bisl-hub/believe"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 px-4 py-2.5 w-full text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-lg transition-colors"
+          >
+            <Github size={18} />
+            <span className="text-sm font-medium">GitHub</span>
+          </a>
           <button
             onClick={() => {
               localStorage.removeItem('token');
               window.location.href = '/login';
             }}
-            className="flex items-center gap-3 px-4 py-3 w-full text-slate-600 hover:text-red-500 hover:bg-slate-50 rounded-lg transition-colors"
+            className="flex items-center gap-3 px-4 py-2.5 w-full text-slate-600 hover:text-red-500 hover:bg-slate-50 rounded-lg transition-colors"
           >
             <LogOut size={20} />
             <span className="font-medium">Sign Out</span>
